@@ -10,7 +10,8 @@
 //#define TOLERANCE 0.0075
 
 #define SLEEP_TIME 3600000
-#define TRANSMISSION_DELAY 260
+#define SMALL_TRANSMISSION_DELAY 60
+#define BIG_TRANSMISSION_DELAY 260
 
 #define NUM_SAMPLES 512
 #define RESISTOR 10000
@@ -67,7 +68,7 @@ void setup() {
 
   // configure ADC1
   adc->setAveraging(0, ADC_1); 
-  adc->setResolution(16, ADC_1); 
+  adc->setResolution(13, ADC_1); 
   adc->setConversionSpeed(ADC_CONVERSION_SPEED::VERY_HIGH_SPEED, ADC_1);
   adc->setSamplingSpeed(ADC_SAMPLING_SPEED::VERY_HIGH_SPEED, ADC_1);
 
@@ -139,18 +140,30 @@ void handleReceivedMessage() {
    deserializeJson(data, Serial1);
    cmd = data["command"];
    sampleNum = data["sampleNum"];
+
+   handshake();
+   delay(BIG_TRANSMISSION_DELAY);
+}
+
+void handshake() {
+    DynamicJsonDocument dataBuffer(50);
+    JsonObject data = dataBuffer.to<JsonObject>();
+
+    data["command"] = START_COMMAND;
+    data["sampleNum"] = NUM_SAMPLES;
+    serializeJson(data, Serial1);
 }
 
 void sendReadings() {
     DynamicJsonDocument dataBuffer(200);
     JsonObject data = dataBuffer.to<JsonObject>();
 
-    for(long isample = 0; isample < NUM_SAMPLES; isample++) {
-          data["sampleNum"] = sampleNum++;
+    for(int isample = 1; isample < NUM_SAMPLES+1; isample++) {
+          //data["sampleNum"] = sampleNum++;
           //data["time"] = "2019-11-15 16:07";
-          data["volt"] = (double)voltReadings[isample];
-          data["curr"] = (double)currReadings[isample];
-          data["micros"] = timeMicros[isample];
+          data["volt"] = (double)voltReadings[isample-1];
+          data["curr"] = (double)currReadings[isample-1];
+          data["micros"] = timeMicros[isample-1];
 
           //Serial.print(isample);
           //Serial.print(",");
@@ -161,9 +174,11 @@ void sendReadings() {
           //Serial.println(time, DEC);
 
           serializeJson(data, Serial1);
-      //    if(isample+1 % 8 == 0) {
-          delay(TRANSMISSION_DELAY);
-        //  }
+          if(isample+1 % 32 == 0) {
+            delay(BIG_TRANSMISSION_DELAY);
+          } else {
+            delay(SMALL_TRANSMISSION_DELAY);
+          }
       
     }  
 }
