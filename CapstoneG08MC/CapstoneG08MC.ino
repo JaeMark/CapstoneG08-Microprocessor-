@@ -10,8 +10,9 @@
 //#define TOLERANCE 0.0075
 
 #define SLEEP_TIME 3600000
-#define SMALL_TRANSMISSION_DELAY 60
-#define BIG_TRANSMISSION_DELAY 260
+#define DELIMETER 16
+#define SMALL_TRANSMISSION_DELAY 25
+#define BIG_TRANSMISSION_DELAY 100
 
 #define NUM_SAMPLES 512
 #define RESISTOR 10000
@@ -19,12 +20,12 @@
 ADC *adc = new ADC();
 
 // pin declarations
-const int voltPin = A9; 
-const int currPin = A3; 
-const int currPos = A10; 
-const int currNeg = A11; 
-const int sleepPin = 7; 
-const int switchPin = 8; 
+const int voltPin = A9;
+const int currPin = A3;
+const int currPos = A10;
+const int currNeg = A11;
+const int sleepPin = 7;
+const int switchPin = 8;
 
 // global variables
 double voltReading = 0.0;
@@ -37,11 +38,16 @@ double currReadings[NUM_SAMPLES];
 unsigned long timeMicros[NUM_SAMPLES];
 
 // commands
-const char* START_COMMAND = "START";
-const char* NO_COMMAND = "NO_COMMAND";
-
-const char* cmd = "NO_COMMAND";
+#define DEFAULT_COMMAND 0
+#define START_COMMAND 1
+#define SLEEP_COMMAND 2
+//const char* START_COMMAND = "START";
+//const char* SLEEP_COMMAND = "SLEEP";
+//const char* NO_COMMAND = "NO_COMMAND";
+//
+//const char* cmd = "NO_COMMAND";
 unsigned long time;
+int cmd;
 
 void setup() {
   // configure pins
@@ -61,14 +67,14 @@ void setup() {
 
   // configure ADC0
   adc->setAveraging(0, ADC_0);
-  adc->setResolution(13, ADC_0); 
+  adc->setResolution(13, ADC_0);
   adc->setConversionSpeed(ADC_CONVERSION_SPEED::VERY_HIGH_SPEED, ADC_0);
   adc->setSamplingSpeed(ADC_SAMPLING_SPEED::VERY_HIGH_SPEED, ADC_0);
   adc->setReference(ADC_REFERENCE::REF_3V3, ADC_0);
 
   // configure ADC1
-  adc->setAveraging(0, ADC_1); 
-  adc->setResolution(13, ADC_1); 
+  adc->setAveraging(0, ADC_1);
+  adc->setResolution(13, ADC_1);
   adc->setConversionSpeed(ADC_CONVERSION_SPEED::VERY_HIGH_SPEED, ADC_1);
   adc->setSamplingSpeed(ADC_SAMPLING_SPEED::VERY_HIGH_SPEED, ADC_1);
 
@@ -79,145 +85,204 @@ void setup() {
   adc->startContinuous(currPin, ADC_1);
   //adc->startContinuousDifferential(A10, A11, ADC_0);
 
+  cmd = DEFAULT_COMMAND; // intialize command;
+  
   delay(1000);
 }
 
 ADC::Sync_result reading;
 double readingADC0;
 double readingADC1;
+long timeStart;
+long timeStop;
 
 void loop() {
-  if(Serial1.available()){
-    if(strcmp(cmd, NO_COMMAND) == 0) {
-      handleReceivedMessage();
-    } 
-  }
+  switch(cmd){
+    case DEFAULT_COMMAND:
+      if (Serial1.available()) handleReceivedMessage();
+      break;
+    case START_COMMAND:
+      timeStart = millis();
   
-  if(strcmp(cmd, START_COMMAND) == 0) {
-      long timeStart = millis();
       pinMode(switchPin, INPUT);
-      digitalWrite(switchPin, HIGH); 
-
+      digitalWrite(switchPin, HIGH);
+  
       unsigned long timeMicro;
-      for(long isample = 0; isample < NUM_SAMPLES; isample++) {
-          timeMicro = micros();
-          // get analog pin readings
-          //reading = adc->readSynchronizedContinuous();
-          readingADC0 = adc->analogRead(voltPin, ADC_0);
-          readingADC1 = adc->analogRead(currPin, ADC_1);
-          //voltReading = (double)readingADC0*3.3/adc->getMaxValue(ADC_0);
-          //currReading = (double)readingADC1*3.3/adc->getMaxValue(ADC_1)/(double)RESISTOR;
-          //voltReadings[isample] = (double)reading.result_adc0*3.3/adc->getMaxValue(ADC_0);
-          //currReadings[isample] = (double)reading.result_adc1*3.3/adc->getMaxValue(ADC_1);
-          voltReadings[isample] = (double)readingADC0*3.3/adc->getMaxValue(ADC_0);
-          currReadings[isample] = (double)readingADC1*3.3/adc->getMaxValue(ADC_1);
-          timeMicros[isample] = timeMicro;
+      for (long isample = 0; isample < NUM_SAMPLES; isample++) {
+        timeMicro = micros();
+        // get analog pin readings
+        //reading = adc->readSynchronizedContinuous();
+        readingADC0 = adc->analogRead(voltPin, ADC_0);
+        readingADC1 = adc->analogRead(currPin, ADC_1);
+        //voltReading = (double)readingADC0*3.3/adc->getMaxValue(ADC_0);
+        //currReading = (double)readingADC1*3.3/adc->getMaxValue(ADC_1)/(double)RESISTOR;
+        //voltReadings[isample] = (double)reading.result_adc0*3.3/adc->getMaxValue(ADC_0);
+        //currReadings[isample] = (double)reading.result_adc1*3.3/adc->getMaxValue(ADC_1);
+        voltReadings[isample] = (double)readingADC0 * 3.3 / adc->getMaxValue(ADC_0);
+        currReadings[isample] = (double)readingADC1 * 3.3 / adc->getMaxValue(ADC_1);
+        timeMicros[isample] = timeMicro;
       }
       sendReadings();
-      
+      cmd = DEFAULT_COMMAND;
+      break;
+    case SLEEP_COMMAND:
       // sleep
       pinMode(sleepPin, INPUT);
       digitalWrite(sleepPin, HIGH);
       pinMode(switchPin, OUTPUT);
-      digitalWrite(switchPin, LOW); 
-      
-      long timeStop = millis();
+      digitalWrite(switchPin, LOW);
+  
+      timeStop = millis();
       long sleepDur = SLEEP_TIME - (timeStop - timeStart);
-      if(sleepDur < 0) {
+      if (sleepDur < 0) {
         sleepDur = 0;
       }
       //delay(10000);
       delay(sleepDur);
-
+  
       // wake up
       pinMode(sleepPin, OUTPUT);
-      digitalWrite(sleepPin, LOW); 
-   }
+      digitalWrite(sleepPin, LOW);
+      pinMode(switchPin, INPUT);
+      digitalWrite(switchPin, HIGH);
+
+      cmd = START_COMMAND; // start reading again
+      break;
+  }
 }
+//  if(Serial1.available()){
+//    if(strcmp(cmd, NO_COMMAND) == 0) {
+//      handleReceivedMessage();
+//    }
+//  }
+//
+//  if(strcmp(cmd, START_COMMAND) == 0) {
+//      long timeStart = millis();
+//      pinMode(switchPin, INPUT);
+//      digitalWrite(switchPin, HIGH);
+//
+//      unsigned long timeMicro;
+//      for(long isample = 0; isample < NUM_SAMPLES; isample++) {
+//          timeMicro = micros();
+//          // get analog pin readings
+//          //reading = adc->readSynchronizedContinuous();
+//          readingADC0 = adc->analogRead(voltPin, ADC_0);
+//          readingADC1 = adc->analogRead(currPin, ADC_1);
+//          //voltReading = (double)readingADC0*3.3/adc->getMaxValue(ADC_0);
+//          //currReading = (double)readingADC1*3.3/adc->getMaxValue(ADC_1)/(double)RESISTOR;
+//          //voltReadings[isample] = (double)reading.result_adc0*3.3/adc->getMaxValue(ADC_0);
+//          //currReadings[isample] = (double)reading.result_adc1*3.3/adc->getMaxValue(ADC_1);
+//          voltReadings[isample] = (double)readingADC0*3.3/adc->getMaxValue(ADC_0);
+//          currReadings[isample] = (double)readingADC1*3.3/adc->getMaxValue(ADC_1);
+//          timeMicros[isample] = timeMicro;
+//      }
+//      sendReadings();
+//
+//      // sleep
+//      pinMode(sleepPin, INPUT);
+//      digitalWrite(sleepPin, HIGH);
+//      pinMode(switchPin, OUTPUT);
+//      digitalWrite(switchPin, LOW);
+//
+//      long timeStop = millis();
+//      long sleepDur = SLEEP_TIME - (timeStop - timeStart);
+//      if(sleepDur < 0) {
+//        sleepDur = 0;
+//      }
+//      //delay(10000);
+//      delay(sleepDur);
+//
+//      // wake up
+//      pinMode(sleepPin, OUTPUT);
+//      digitalWrite(sleepPin, LOW);
+//   }
+
 
 void handleReceivedMessage() {
-   DynamicJsonDocument data(50);
-   deserializeJson(data, Serial1);
-   cmd = data["command"];
-   sampleNum = data["sampleNum"];
+  DynamicJsonDocument data(100);
+  deserializeJson(data, Serial1);
+  cmd = data["command"];
 
-   handshake();
-   delay(BIG_TRANSMISSION_DELAY);
+  if(cmd == START_COMMAND) {
+    //sampleNum = data["sampleNum"];
+    handshake();
+    delay(BIG_TRANSMISSION_DELAY);
+  }
 }
 
 void handshake() {
-    DynamicJsonDocument dataBuffer(50);
-    JsonObject data = dataBuffer.to<JsonObject>();
+  DynamicJsonDocument dataBuffer(50);
+  JsonObject data = dataBuffer.to<JsonObject>();
 
-    data["command"] = START_COMMAND;
-    data["sampleNum"] = NUM_SAMPLES;
-    serializeJson(data, Serial1);
+  data["command"] = START_COMMAND;
+  data["sampleNum"] = NUM_SAMPLES;
+  serializeJson(data, Serial1);
 }
 
 void sendReadings() {
-    DynamicJsonDocument dataBuffer(200);
-    JsonObject data = dataBuffer.to<JsonObject>();
+  DynamicJsonDocument dataBuffer(200);
+  JsonObject data = dataBuffer.to<JsonObject>();
 
-    for(int isample = 1; isample < NUM_SAMPLES+1; isample++) {
-          //data["sampleNum"] = sampleNum++;
-          //data["time"] = "2019-11-15 16:07";
-          data["volt"] = (double)voltReadings[isample-1];
-          data["curr"] = (double)currReadings[isample-1];
-          data["micros"] = timeMicros[isample-1];
+  for (int isample = 1; isample < NUM_SAMPLES + 1; isample++) {
+    //data["sampleNum"] = sampleNum++;
+    //data["time"] = "2019-11-15 16:07";
+    data["volt"] = (double)voltReadings[isample - 1];
+    data["curr"] = (double)currReadings[isample - 1];
+    data["micros"] = timeMicros[isample - 1];
 
-          //Serial.print(isample);
-          //Serial.print(",");
-          //Serial.print(voltReading, DEC);
-          //Serial.print(",");
-          //Serial.println(currReadings[isample], DEC);
-          //Serial.print(",");
-          //Serial.println(time, DEC);
+    //Serial.print(isample);
+    //Serial.print(",");
+    //Serial.print(voltReading, DEC);
+    //Serial.print(",");
+    //Serial.println(currReadings[isample], DEC);
+    //Serial.print(",");
+    //Serial.println(time, DEC);
 
-          serializeJson(data, Serial1);
-          if(isample+1 % 32 == 0) {
-            delay(BIG_TRANSMISSION_DELAY);
-          } else {
-            delay(SMALL_TRANSMISSION_DELAY);
-          }
-      
-    }  
+    serializeJson(data, Serial1);
+    if (isample + 1 % DELIMETER == 0) {
+      delay(BIG_TRANSMISSION_DELAY);
+    } else {
+      delay(SMALL_TRANSMISSION_DELAY);
+    }
+
+  }
 }
 void sendData() {
-    DynamicJsonDocument dataBuffer(100);
-    JsonObject data = dataBuffer.to<JsonObject>();
-    data["sampleNum"] = sampleNum;
-    data["time"] = "2019-11-15 16:07";
-    data["volt"] = voltReading;
-    data["curr"] = currReading;
-    sampleNum++;
-//
-//    Serial.print(sampleNum);
-//    Serial.print(",");
-//    Serial.print(voltReading, DEC);
-//    Serial.print(",");
-//    Serial.print(currReading, DEC);
-//    Serial.print(",");
-//    Serial.println(time, DEC);
-    
-    Serial1.print(sampleNum);
-    Serial1.print(",");
-    Serial1.print(voltReading, DEC);
-    Serial1.print(",");
-    Serial1.print(currReading, DEC);
-    Serial1.print(",");
-    Serial1.println(time, DEC);
-    delay(500);
-    
-   //serializeJson(data, Serial1);
-   
-   //serializeJson(data, Serial);
-   //Serial.println();
+  DynamicJsonDocument dataBuffer(100);
+  JsonObject data = dataBuffer.to<JsonObject>();
+  data["sampleNum"] = sampleNum;
+  data["time"] = "2019-11-15 16:07";
+  data["volt"] = voltReading;
+  data["curr"] = currReading;
+  sampleNum++;
+  //
+  //    Serial.print(sampleNum);
+  //    Serial.print(",");
+  //    Serial.print(voltReading, DEC);
+  //    Serial.print(",");
+  //    Serial.print(currReading, DEC);
+  //    Serial.print(",");
+  //    Serial.println(time, DEC);
+
+  Serial1.print(sampleNum);
+  Serial1.print(",");
+  Serial1.print(voltReading, DEC);
+  Serial1.print(",");
+  Serial1.print(currReading, DEC);
+  Serial1.print(",");
+  Serial1.println(time, DEC);
+  delay(500);
+
+  //serializeJson(data, Serial1);
+
+  //serializeJson(data, Serial);
+  //Serial.println();
 
 }
 
 // MISC.
 //      long isample = 0;
-//      
+//
 //      time = millis();
 //      readingADC0 = adc->analogRead(voltPin, ADC_0);
 //      readingADC1 = adc->analogReadDifferential(A10,A11, ADC_1);
@@ -235,12 +300,12 @@ void sendData() {
 //      //for(long isample = 0; isample < NUM_SAMPLES; isample++) {
 //        // get analog pin readings
 //        //reading = adc->analogSynchronizedRead(voltPin, currPin);
-//      
+//
 //        //reading = adc->analogSynchronizedReadDifferential(A10, A11, A12, A13);
-//        
+//
 //        //reading.result_adc0 = (double)reading.result_adc0;
 //        //reading.result_adc1 = (double)reading.result_adc1;
-//      
+//
 //        //voltReading = (double)reading.result_adc0*3.3/adc->getMaxValue(ADC_0);
 //        //currReading = RESISTOR*(double)reading.result_adc1*3.3/adc->getMaxValue(ADC_1);
 //          if(isample >= NUM_SAMPLE_MAX) {
@@ -253,5 +318,5 @@ void sendData() {
 //          voltReading = (double)readingADC0*3.3/adc->getMaxValue(ADC_0);
 //          currReading = RESISTOR*(double)readingADC1*3.3/adc->getMaxValue(ADC_1);
 //
-//          isample++;  
+//          isample++;
 //      }
