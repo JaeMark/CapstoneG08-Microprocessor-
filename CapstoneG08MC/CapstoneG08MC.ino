@@ -5,14 +5,13 @@
 // constant declarations
 #define BAUD_RATE 115200
 #define MAX_NUM_SAMPLES 2048
+#define DELAY_T 1000
 
 #define DEFAULT_SLEEP_TIME 3600000
 #define DEFAULT_TRANS_DELIMETER 16
 #define DEFAULT_SMALL_TRANSMISSION_DELAY 25
 #define DEFAULT_BIG_TRANSMISSION_DELAY 100
 #define DEFAULT_NUM_SAMPLES 512
-
-#define RESISTOR 10000
 
 // commands
 #define DEFAULT_COMMAND 0
@@ -24,6 +23,7 @@
 int cmd;
 
 unsigned long sleep_time;
+
 int trans_delim;
 int small_delay_t;
 int big_delay_t;
@@ -31,7 +31,6 @@ int big_delay_t;
 int sampleNum = 0;
 double voltReadings[MAX_NUM_SAMPLES];
 double currReadings[MAX_NUM_SAMPLES];
-unsigned long timeMicros[MAX_NUM_SAMPLES];
 
 // pin declarations
 const int voltPin = A9;
@@ -45,8 +44,11 @@ void setup() {
   // configure pins
   pinMode(voltPin, INPUT);
   pinMode(currPin, INPUT);
+
   pinMode(sleepPin, OUTPUT);
-  pinMode(switchPin, INPUT);
+  digitalWrite(sleepPin, LOW);
+  pinMode(switchPin, OUTPUT);
+  digitalWrite(switchPin, LOW);
 
   // start serial
   Serial.begin(BAUD_RATE);
@@ -67,9 +69,9 @@ void setup() {
   adc->setResolution(13, ADC_1);
   adc->setConversionSpeed(ADC_CONVERSION_SPEED::VERY_HIGH_SPEED, ADC_1);
   adc->setSamplingSpeed(ADC_SAMPLING_SPEED::VERY_HIGH_SPEED, ADC_1);
+  adc->setReference(ADC_REFERENCE::REF_3V3, ADC_1);
 
-  adc->startContinuous(voltPin, ADC_0);
-  adc->startContinuous(currPin, ADC_1);
+  adc->startSynchronizedContinuous(voltPin, currPin);
 
   // initialize global variables
   cmd = DEFAULT_COMMAND;
@@ -78,15 +80,15 @@ void setup() {
   small_delay_t = DEFAULT_SMALL_TRANSMISSION_DELAY;
   big_delay_t = DEFAULT_BIG_TRANSMISSION_DELAY;
 
-  delay(1000);
+  delay(DELAY_T);
 }
 
 ADC::Sync_result reading;
 double readingADC0;
 double readingADC1;
 
-unsigned long timeStart;
-unsigned long timeStop;
+unsigned long timeStart = 0;
+unsigned long timeStop = 0;
 
 DynamicJsonDocument received_data(100);
 
@@ -101,8 +103,11 @@ void loop() {
     case START_COMMAND:
       timeStart = millis();
 
+      // switch to measuring mode
       pinMode(switchPin, INPUT);
       digitalWrite(switchPin, HIGH);
+
+      delay(DELAY_T);
       
       // parse the rest of the received json object
       sampleNum = received_data["sampleNum"];
@@ -112,45 +117,41 @@ void loop() {
       
       startHandshake();
 
-      unsigned long timeMicro;
       for (int isample = 0; isample < sampleNum; isample++) {
         // get analog pin readings
-        //reading = adc->readSynchronizedContinuous();
-        readingADC0 = adc->analogRead(voltPin, ADC_0);
-        readingADC1 = adc->analogRead(currPin, ADC_1);
-        voltReadings[isample] = (double)readingADC0 * 3.3 / adc->getMaxValue(ADC_0);
-        currReadings[isample] = (double)readingADC1 * 3.3 / adc->getMaxValue(ADC_1);
-
-        timeMicro = micros();
-        timeMicros[isample] = timeMicro;
+        reading = adc->readSynchronizedContinuous();
+        voltReadings[isample] = (double)reading.result_adc0 * 3.3 / adc->getMaxValue(ADC_0);
+        currReadings[isample] = (double)reading.result_adc1 * 3.3 / adc->getMaxValue(ADC_1);
       }
+
+      delay(DELAY_T);
+      
+      // switch to charging mode
+      pinMode(switchPin, OUTPUT);
+      digitalWrite(switchPin, LOW);
+      
       sendReadings();
+      
       cmd = DEFAULT_COMMAND;
       break;
     case SLEEP_COMMAND:
-      // sleep
-      pinMode(sleepPin, INPUT);
-      digitalWrite(sleepPin, HIGH);
-      pinMode(switchPin, OUTPUT);
-      digitalWrite(switchPin, LOW);
-
       // parse the rest of the received json object
       sleep_time = received_data["sleepTime"];
 
+      // sleep
+      pinMode(sleepPin, INPUT);
+      digitalWrite(sleepPin, HIGH);
       
-      timeStop = millis();
-      long sleepDur = sleep_time - (timeStop - timeStart);
-      if (sleepDur < 0) {
-        sleepDur = 0;
+      while(millis() < timeStart + sleep_time) {
+        // wait
       }
-      delay(sleepDur);
-
+      
       // wake up
       pinMode(sleepPin, OUTPUT);
       digitalWrite(sleepPin, LOW);
-      pinMode(switchPin, INPUT);
-      digitalWrite(switchPin, HIGH);
 
+      delay(DELAY_T);
+      
       wakeUpHandshake();
       
       cmd = DEFAULT_COMMAND;
@@ -182,9 +183,9 @@ void sendReadings() {
   JsonObject data = dataBuffer.to<JsonObject>();
 
   for (int isample = 1; isample < sampleNum + 1; isample++) {
+    data["sampleNum"] = isample;
     data["volt"] = (double)voltReadings[isample - 1];
     data["curr"] = (double)currReadings[isample - 1];
-    data["micros"] = (unsigned long)timeMicros[isample - 1];
 
     serializeJson(data, Serial1);
     if (isample % trans_delim == 0) {
