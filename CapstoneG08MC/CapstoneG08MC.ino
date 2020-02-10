@@ -31,7 +31,6 @@ int big_delay_t;
 int sampleNum = 0;
 double voltReadings[MAX_NUM_SAMPLES];
 double currReadings[MAX_NUM_SAMPLES];
-unsigned long microsReading[MAX_NUM_SAMPLES];
 
 // pin declarations
 const int voltPin = A9;
@@ -91,12 +90,7 @@ double readingADC1;
 unsigned long timeStart = 0;
 unsigned long timeStop = 0;
 
-int isampleNum = 0;
-
-IntervalTimer sampleTimer;
-
 DynamicJsonDocument received_data(100);
-
 
 void loop() {
   switch (cmd) {
@@ -107,7 +101,6 @@ void loop() {
       }
       break;
     case START_COMMAND:
-      int isampleCopy;
       timeStart = millis();
 
       // switch to measuring mode
@@ -124,24 +117,12 @@ void loop() {
       
       startHandshake();
 
-      isampleCopy = 0;
-      sampleTimer.begin(readADC, 25);
-      while (isampleCopy < sampleNum) {
-        delay(DELAY_T);
-        
-        noInterrupts();
-        isampleCopy = isampleNum;
-        interrupts();
+      for (int isample = 0; isample < sampleNum; isample++) {
+        // get analog pin readings
+        reading = adc->readSynchronizedContinuous();
+        voltReadings[isample] = (double)reading.result_adc0 * 3.3 / adc->getMaxValue(ADC_0);
+        currReadings[isample] = (double)reading.result_adc1 * 3.3 / adc->getMaxValue(ADC_1);
       }
-      sampleTimer.end();
-      isampleNum = 0;
-      
-//      for (int isample = 0; isample < sampleNum; isample++) {
-//        // get analog pin readings
-//        reading = adc->readSynchronizedContinuous();
-//        voltReadings[isample] = (double)reading.result_adc0 * 3.3 / adc->getMaxValue(ADC_0);
-//        currReadings[isample] = (double)reading.result_adc1 * 3.3 / adc->getMaxValue(ADC_1);
-//      }
 
       delay(DELAY_T);
       
@@ -178,18 +159,6 @@ void loop() {
   }
 }
 
-
-void readADC() {
-    // get analog pin reading
-    if(isampleNum < sampleNum) {
-      reading = adc->readSynchronizedContinuous();
-      voltReadings[isampleNum] = (double)reading.result_adc0 * 3.3 / adc->getMaxValue(ADC_0);
-      currReadings[isampleNum] = (double)reading.result_adc1 * 3.3 / adc->getMaxValue(ADC_1);
-      microsReading[isampleNum] = micros();
-    }
-    isampleNum++;
-    
-}
 void startHandshake() {
   DynamicJsonDocument dataBuffer(50);
   JsonObject data_to_send = dataBuffer.to<JsonObject>();
@@ -217,7 +186,6 @@ void sendReadings() {
     data["sampleNum"] = isample;
     data["volt"] = (double)voltReadings[isample - 1];
     data["curr"] = (double)currReadings[isample - 1];
-    data["micros"] = microsReading[isample-1];
 
     serializeJson(data, Serial1);
     if (isample % trans_delim == 0) {
