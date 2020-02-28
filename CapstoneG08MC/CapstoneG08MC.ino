@@ -1,6 +1,7 @@
 #include <ArduinoJson.h>
-#include <ADC.h>
 #include <vector>
+#include <ADC.h>
+#include <Snooze.h>
 
 // constant declarations
 #define BAUD_RATE 115200
@@ -31,7 +32,7 @@ int big_delay_t;
 int sampleNum = 0;
 double voltReadings[MAX_NUM_SAMPLES];
 double currReadings[MAX_NUM_SAMPLES];
-unsigned long microsReading[MAX_NUM_SAMPLES];
+//unsigned long microsReading[MAX_NUM_SAMPLES];
 
 // pin declarations
 const int voltPin = A9;
@@ -89,14 +90,13 @@ double readingADC0;
 double readingADC1;
 
 unsigned long timeStart = 0;
-unsigned long timeStop = 0;
-
 int isampleNum = 0;
 
 IntervalTimer sampleTimer;
+SnoozeTimer sleepTimer;
+SnoozeBlock sleepConfig(sleepTimer);
 
 DynamicJsonDocument received_data(100);
-
 
 void loop() {
   switch (cmd) {
@@ -107,7 +107,6 @@ void loop() {
       }
       break;
     case START_COMMAND:
-      int isampleCopy;
       timeStart = millis();
 
       // switch to measuring mode
@@ -124,24 +123,20 @@ void loop() {
       
       startHandshake();
 
-      isampleCopy = 0;
-      sampleTimer.begin(readADC, 25);
+      int isampleCopy = 0;  // a copy of the number of samples processed
+      
+      // begin ADC reading at 25 microseconds per sample = 40kHz sampling frequency
+      sampleTimer.begin(readADC, 25); 
       while (isampleCopy < sampleNum) {
         delay(DELAY_T);
-        
+
+        // check if all samples have been read
         noInterrupts();
         isampleCopy = isampleNum;
         interrupts();
       }
       sampleTimer.end();
       isampleNum = 0;
-      
-//      for (int isample = 0; isample < sampleNum; isample++) {
-//        // get analog pin readings
-//        reading = adc->readSynchronizedContinuous();
-//        voltReadings[isample] = (double)reading.result_adc0 * 3.3 / adc->getMaxValue(ADC_0);
-//        currReadings[isample] = (double)reading.result_adc1 * 3.3 / adc->getMaxValue(ADC_1);
-//      }
 
       delay(DELAY_T);
       
@@ -157,20 +152,11 @@ void loop() {
       // parse the rest of the received json object
       sleep_time = received_data["sleepTime"];
 
-      // sleep
-      pinMode(sleepPin, INPUT);
-      digitalWrite(sleepPin, HIGH);
+      // put Teensy and XBee to sleep
+      sleepDevice((unsigned long)sleep_time);
       
-      while(millis() < timeStart + sleep_time) {
-        // wait
-      }
-      
-      // wake up
-      pinMode(sleepPin, OUTPUT);
-      digitalWrite(sleepPin, LOW);
-
       delay(DELAY_T);
-      
+
       wakeUpHandshake();
       
       cmd = DEFAULT_COMMAND;
@@ -178,19 +164,19 @@ void loop() {
   }
 }
 
-
 void readADC() {
     // get analog pin reading
     if(isampleNum < sampleNum) {
       reading = adc->readSynchronizedContinuous();
       voltReadings[isampleNum] = (double)reading.result_adc0 * 3.3 / adc->getMaxValue(ADC_0);
       currReadings[isampleNum] = (double)reading.result_adc1 * 3.3 / adc->getMaxValue(ADC_1);
-      microsReading[isampleNum] = micros();
+      //microsReading[isampleNum] = micros();
     }
     isampleNum++;
     
 }
 void startHandshake() {
+  // this method sends a handshake to let the workstation know that the Teensy is not in measuring mode
   DynamicJsonDocument dataBuffer(50);
   JsonObject data_to_send = dataBuffer.to<JsonObject>();
 
@@ -201,6 +187,7 @@ void startHandshake() {
 }
 
 void wakeUpHandshake() {
+  // this method sends a handshake to let the workstation know that the Teensy and XBee are awake
   DynamicJsonDocument dataBuffer(50);
   JsonObject data_to_send = dataBuffer.to<JsonObject>();
 
@@ -210,6 +197,7 @@ void wakeUpHandshake() {
 }
 
 void sendReadings() {
+  // this method sends the samples read to the workstation
   DynamicJsonDocument dataBuffer(200);
   JsonObject data = dataBuffer.to<JsonObject>();
 
@@ -217,7 +205,7 @@ void sendReadings() {
     data["sampleNum"] = isample;
     data["volt"] = (double)voltReadings[isample - 1];
     data["curr"] = (double)currReadings[isample - 1];
-    data["micros"] = microsReading[isample-1];
+    //data["micros"] = microsReading[isample-1];
 
     serializeJson(data, Serial1);
     if (isample % trans_delim == 0) {
@@ -227,4 +215,22 @@ void sendReadings() {
     }
 
   }
+}
+
+void sleepDevice(unsigned long sleepTime) {
+    // put XBee to sleep
+    pinMode(sleepPin, INPUT);
+    digitalWrite(sleepPin, HIGH);
+      
+    unsigned long timeElapsed = millis() - timeStart;
+    unsigned long wakeupTime = 0;
+    if(timeElapsed < sleepTime) wakeupTime = sleepTime - timeElapsed;
+    sleepTimer.setTimer(wakeupTime);  // set sleep duration
+
+    // put Teensy to sleep sleep
+    Snooze.sleep(sleepConfig);
+
+    // wake up!
+    pinMode(sleepPin, OUTPUT);
+    digitalWrite(sleepPin, LOW);
 }
