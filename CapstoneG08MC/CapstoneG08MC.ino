@@ -9,10 +9,10 @@
 #define DELAY_T 1000
 
 #define DEFAULT_SLEEP_TIME 3600000
-#define DEFAULT_TRANS_DELIMETER 16
-#define DEFAULT_SMALL_TRANSMISSION_DELAY 25
-#define DEFAULT_BIG_TRANSMISSION_DELAY 100
-#define DEFAULT_NUM_SAMPLES 512
+#define DEFAULT_TRANS_DELIMETER 8
+#define DEFAULT_SMALL_TRANSMISSION_DELAY 500
+#define DEFAULT_BIG_TRANSMISSION_DELAY 1000
+#define DEFAULT_NUM_SAMPLES 2000
 
 // commands
 #define DEFAULT_COMMAND 0
@@ -51,7 +51,7 @@ void setup() {
   digitalWrite(sleepPin, LOW);
   pinMode(switchPin, OUTPUT);
   digitalWrite(switchPin, LOW);
-
+  
   // start serial
   Serial.begin(BAUD_RATE);
   Serial1.begin(BAUD_RATE);
@@ -101,65 +101,85 @@ DynamicJsonDocument received_data(100);
 void loop() {
   switch (cmd) {
     case DEFAULT_COMMAND:
-      if (Serial1.available()) {
-          deserializeJson(received_data, Serial1);
-          cmd = received_data["command"];
+      {
+        if (Serial1.available()) {
+            deserializeJson(received_data, Serial1);
+            cmd = received_data["command"];
+        }
       }
       break;
     case START_COMMAND:
-      timeStart = millis();
-
-      // switch to measuring mode
-      pinMode(switchPin, INPUT);
-      digitalWrite(switchPin, HIGH);
-
-      delay(DELAY_T);
-      
-      // parse the rest of the received json object
-      sampleNum = received_data["sampleNum"];
-      trans_delim = received_data["delim"];
-      small_delay_t = received_data["smallDelay"];
-      big_delay_t = received_data["bigDelay"];
-      
-      startHandshake();
-
-      int isampleCopy = 0;  // a copy of the number of samples processed
-      
-      // begin ADC reading at 25 microseconds per sample = 40kHz sampling frequency
-      sampleTimer.begin(readADC, 25); 
-      while (isampleCopy < sampleNum) {
+      {
+        timeStart = millis();
+  
+        // switch to measuring mode
+        pinMode(switchPin, INPUT);
+        digitalWrite(switchPin, HIGH);
+  
         delay(DELAY_T);
-
-        // check if all samples have been read
-        noInterrupts();
-        isampleCopy = isampleNum;
-        interrupts();
+        
+        // parse the rest of the received json object
+        sampleNum = received_data["sampleNum"];
+        trans_delim = received_data["delim"];
+        small_delay_t = received_data["smallDelay"];
+        big_delay_t = received_data["bigDelay"];
+        
+        startHandshake();
+  
+        int isampleCopy = 0;  // a copy of the number of samples processed
+        
+        // begin ADC reading at 25 microseconds per sample = 40kHz sampling frequency
+        sampleTimer.begin(readADC, 25); 
+        while (isampleCopy < sampleNum) {
+          delay(DELAY_T);
+  
+          // check if all samples have been read
+          noInterrupts();
+          isampleCopy = isampleNum;
+          interrupts();
+        }
+        sampleTimer.end();
+        isampleNum = 0;
+  
+        delay(DELAY_T);
+        
+        // switch to charging mode
+        pinMode(switchPin, OUTPUT);
+        digitalWrite(switchPin, LOW);
+        
+        sendReadings();
+        
+        cmd = DEFAULT_COMMAND;
       }
-      sampleTimer.end();
-      isampleNum = 0;
-
-      delay(DELAY_T);
-      
-      // switch to charging mode
-      pinMode(switchPin, OUTPUT);
-      digitalWrite(switchPin, LOW);
-      
-      sendReadings();
-      
-      cmd = DEFAULT_COMMAND;
       break;
     case SLEEP_COMMAND:
-      // parse the rest of the received json object
-      sleep_time = received_data["sleepTime"];
+      {
+        // parse the rest of the received json object
+        sleep_time = received_data["sleepTime"];
 
-      // put Teensy and XBee to sleep
-      sleepDevice((unsigned long)sleep_time);
-      
-      delay(DELAY_T);
+        // put XBee to sleep
+        pinMode(sleepPin, INPUT);
+        digitalWrite(sleepPin, HIGH);
 
-      wakeUpHandshake();
-      
-      cmd = DEFAULT_COMMAND;
+        // calculate sleep time
+        unsigned long timeElapsed = millis() - timeStart;
+        unsigned long wakeupTime = 0;
+        if(timeElapsed < sleep_time) wakeupTime = sleep_time - timeElapsed;
+
+        // put Teensy to sleep sleep
+        sleepTimer.setTimer(wakeupTime);  // set sleep duration
+        Snooze.sleep(sleepConfig);
+  
+        // wake up!
+        pinMode(sleepPin, OUTPUT);
+        digitalWrite(sleepPin, LOW);
+
+        delay(DELAY_T);
+  
+        wakeUpHandshake();
+        
+        cmd = DEFAULT_COMMAND;
+      }
       break;
   }
 }
@@ -215,22 +235,4 @@ void sendReadings() {
     }
 
   }
-}
-
-void sleepDevice(unsigned long sleepTime) {
-    // put XBee to sleep
-    pinMode(sleepPin, INPUT);
-    digitalWrite(sleepPin, HIGH);
-      
-    unsigned long timeElapsed = millis() - timeStart;
-    unsigned long wakeupTime = 0;
-    if(timeElapsed < sleepTime) wakeupTime = sleepTime - timeElapsed;
-    sleepTimer.setTimer(wakeupTime);  // set sleep duration
-
-    // put Teensy to sleep sleep
-    Snooze.sleep(sleepConfig);
-
-    // wake up!
-    pinMode(sleepPin, OUTPUT);
-    digitalWrite(sleepPin, LOW);
 }
